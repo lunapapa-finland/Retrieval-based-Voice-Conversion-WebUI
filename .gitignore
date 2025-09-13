@@ -28,3 +28,4 @@ ffmpeg.*
 ffprobe.*
 
 /data
+/results
