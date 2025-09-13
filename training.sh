@@ -1,28 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ========= USER CONFIG =========
-EXP="Test"                       # e.g. 222
-DATA_DIR="./data/myvoice"        # raw audio folder
-SR="40k"                         # 32k/40k/48k
-SAMPLE_RATE_HZ=40000             # 32000/40000/48000
-NPROC=7                          # workers
-VERSION="v2"                     # v1 or v2
-FEAT_DIM=768                     # v2=768, v1 often 256
-BATCH_SIZE=1
-TOTAL_EPOCH=150
-SAVE_EVERY=10
-PRETRAIN_G="assets/pretrained_v2/f0G40k.pth"
-PRETRAIN_D="assets/pretrained_v2/f0D40k.pth"
-
-# Optional: train FAISS index after feature/F0
-TRAIN_INDEX=1        # 0 to skip
-KMEANS=0             # e.g. 10000 to enable downsampling
+# ========= LOAD CONFIG =========
+. ./config.env
 
 # ========= ENV (macOS/MPS) =========
-export PYTORCH_ENABLE_MPS_FALLBACK=1
-export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
-export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+# Keep minimal, only on macOS. These help with MPS fallback but aren't strictly required on Linux.
+if [[ "$(uname)" == "Darwin" ]]; then
+  export PYTORCH_ENABLE_MPS_FALLBACK=1
+  export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
+  export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+elif [[ "$(uname)" != "Linux" ]]; then
+  echo "ERROR: Unsupported operating system"
+  exit 1
+fi
+
+# (Optional) Ensure Python 3.8+; if you rely on a virtualenv, you may remove this block.
+python - <<'PY' || { echo "ERROR: Python 3.8+ required"; exit 1; }
+import sys
+major, minor = sys.version_info[:2]
+raise SystemExit(0 if (major > 3 or (major == 3 and minor >= 8)) else 1)
+PY
+
+# ========= AUTO-TUNE WORKERS (optional) =========
+# If NPROC is 0, auto-detect logical CPUs.
+if [[ "${NPROC}" == "0" ]]; then
+  if command -v nproc >/dev/null 2>&1; then
+    NPROC="$(nproc)"
+  elif [[ "$(uname)" == "Darwin" ]]; then
+    NPROC="$(sysctl -n hw.ncpu)"
+  else
+    NPROC="4"
+  fi
+fi
+
+# ========= VALIDATE PRETRAINED WEIGHTS =========
+if [[ ! -f "${PRETRAIN_G}" ]]; then
+  echo "ERROR: Generator weights not found: ${PRETRAIN_G}"
+  exit 1
+fi
+if [[ ! -f "${PRETRAIN_D}" ]]; then
+  echo "ERROR: Discriminator weights not found: ${PRETRAIN_D}"
+  exit 1
+fi
 
 # ========= PATHS =========
 LOG_DIR="./logs/${EXP}"
@@ -40,38 +60,21 @@ mkdir -p "${LOG_DIR}" "${RESULT_DIR}" "${DATA_DIR}"
 
 # ========= 1) PREPROCESS =========
 echo "==> Preprocess"
-python infer/modules/train/preprocess.py \
-  "${DATA_DIR}" \
-  "${SAMPLE_RATE_HZ}" \
-  "${NPROC}" \
-  "${LOG_DIR}" \
-  False \
-  3.0
+python infer/modules/train/preprocess.py   "${DATA_DIR}"   "${SAMPLE_RATE_HZ}"   "${NPROC}"   "${LOG_DIR}"   False   3.0
 
 # ========= 2) FEATURE EXTRACTION (HuBERT) =========
-echo "==> Feature extraction (HuBERT -> 3_feature${FEAT_DIM})"
-python infer/modules/train/extract_feature_print.py \
-  mps \
-  1 \
-  0 \
-  "${LOG_DIR}" \
-  "${VERSION}" \
-  False
+# Device comes from config.env (DEVICE=mps|cuda|cpu)
+echo "==> Feature extraction (HuBERT -> 3_feature${FEAT_DIM}) on ${DEVICE}"
+python infer/modules/train/extract_feature_print.py   "${DEVICE}"   1   0   "${LOG_DIR}"   "${VERSION}"   False
 
 # ========= 3) PITCH (F0) EXTRACTION =========
 echo "==> Pitch (F0) extraction with RMVPE"
-python infer/modules/train/extract/extract_f0_print.py \
-  "${LOG_DIR}" \
-  "${NPROC}" \
-  rmvpe
+python infer/modules/train/extract/extract_f0_print.py   "${LOG_DIR}"   "${NPROC}"   rmvpe
 
 # ========= 4) (OPTIONAL) FAISS INDEX =========
 if [[ "${TRAIN_INDEX}" == "1" ]]; then
   echo "==> Train FAISS index (saved to ${LOG_DIR})"
-  python tools/train_index.py \
-    --exp "${EXP}" \
-    --feat-dim "${FEAT_DIM}" \
-    --kmeans "${KMEANS}"
+  python tools/train_index.py     --exp "${EXP}"     --feat-dim "${FEAT_DIM}"     --kmeans "${KMEANS}"
 fi
 
 # ========= 5) SAFELY GENERATE filelist.txt =========
@@ -89,27 +92,27 @@ done
 
 # Build filelist atomically then move into place
 tmp_filelist="${FILELIST}.tmp"
+trap 'rm -f "${tmp_filelist}"' EXIT
 : > "${tmp_filelist}"
 
-# sort for stable order; skip hidden files
-find "${GT_WAV_DIR}" -type f -name "*.wav" -maxdepth 1 2>/dev/null | LC_ALL=C sort | while IFS= read -r wav; do
-  base="$(basename "$wav")"             # e.g. 12_3.wav
-  stem="${base%.wav}"                   # e.g. 12_3
-  feat="${FEAT_DIR}/${stem}.npy"
-  f0a="${F0_DIR_A}/${stem}.wav.npy"
-  f0nsf="${F0_DIR_NSF}/${stem}.wav.npy"
+# Use NUL-delimited find to handle spaces safely; stable sort.
+find "${GT_WAV_DIR}" -maxdepth 1 -type f -name "*.wav" -print0 2>/dev/null   | LC_ALL=C sort -z   | while IFS= read -r -d '' wav; do
+      base="$(basename "$wav")"             # e.g. 12_3.wav
+      stem="${base%.wav}"                   # e.g. 12_3
+      feat="${FEAT_DIR}/${stem}.npy"
+      f0a="${F0_DIR_A}/${stem}.wav.npy"
+      f0nsf="${F0_DIR_NSF}/${stem}.wav.npy"
 
-  # Only include rows where every file exists
-  if [[ -f "$feat" && -f "$f0a" && -f "$f0nsf" ]]; then
-    printf "%s|%s|%s|%s|0\n" "$wav" "$feat" "$f0a" "$f0nsf" >> "${tmp_filelist}"
-  else
-    echo "WARN: skip ${stem} (missing one of feature/F0 files)" >&2
-  fi
-done
+      # Only include rows where every file exists
+      if [[ -f "$feat" && -f "$f0a" && -f "$f0nsf" ]]; then
+        printf "%s|%s|%s|%s|0\n" "$wav" "$feat" "$f0a" "$f0nsf" >> "${tmp_filelist}"
+      else
+        echo "WARN: skip ${stem} (missing one of feature/F0 files)" >&2
+      fi
+    done
 
 # Strip CRs and blank lines, then install
 tr -d '\r' < "${tmp_filelist}" | awk 'NF>0' > "${FILELIST}"
-rm -f "${tmp_filelist}"
 
 # Validate: every line must have exactly 5 fields
 bad_lines=$(awk -F'|' 'NF!=5{print NR}' "${FILELIST}" || true)
@@ -180,16 +183,4 @@ echo "Wrote ${CFG_JSON}"
 
 # ========= 7) TRAIN =========
 echo "==> Train model"
-python infer/modules/train/train.py \
-  -e "${EXP}" \
-  -sr "${SR}" \
-  -f0 1 \
-  -bs "${BATCH_SIZE}" \
-  -te "${TOTAL_EPOCH}" \
-  -se "${SAVE_EVERY}" \
-  -pg "${PRETRAIN_G}" \
-  -pd "${PRETRAIN_D}" \
-  -l 0 \
-  -c 0 \
-  -sw 1 \
-  -v "${VERSION}"
+python infer/modules/train/train.py   -e "${EXP}"   -sr "${SR}"   -f0 1   -bs "${BATCH_SIZE}"   -te "${TOTAL_EPOCH}"   -se "${SAVE_EVERY}"   -pg "${PRETRAIN_G}"   -pd "${PRETRAIN_D}"   -l 0   -c 0   -sw 1   -v "${VERSION}"

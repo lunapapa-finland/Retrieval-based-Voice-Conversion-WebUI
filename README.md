@@ -82,13 +82,29 @@ chmod +x run.sh
 
 ---
 
-## 6. Training
+## 6. Configuration if necessary
 
-(Optionally) Modify the parameters in `training.sh`, then run:
+
+```bash
+nano config.env
+```
+
+---
+
+## 7. Training
 
 ```bash
 chmod +x training.sh
 ./training.sh
+```
+
+---
+
+## 8. Inference
+
+```bash
+chmod +x inference.sh
+./inference.sh
 ```
 
 ---
