@@ -29,7 +29,11 @@ ffprobe.*
 
 /data
 /results
-/auto-video-pipeline/data
+/auto-video-pipeline/data/step1_scripts/*
+/auto-video-pipeline/data/step2_wav-tts/*
+/auto-video-pipeline/data/step3_wav-converted/*
+/auto-video-pipeline/data/step4_captions/*
+/auto-video-pipeline/data/step5_videos/*
 /auto-video-pipeline/FFmpeg/assets/*
 /auto-video-pipeline/rvc/CHECKPOINT/*
 /auto-video-pipeline/tts_piper/models/*
