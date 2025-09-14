@@ -17,11 +17,10 @@ xcode-select --install
 
 ## 2. Conda Environment
 
-> Python **3.8** is recommended for better stability with FAISS on macOS.
 
 ```bash
-conda create -n rvc38 python=3.8 -y
-conda activate rvc38
+conda create -n video-pipeline python=3.9 -y
+conda activate video-pipeline
 python -m pip install --upgrade "pip<24.1"
 ```
 
@@ -35,13 +34,13 @@ Install Python packages:
 pip install -r requirements.txt
 ```
 
-If `faiss-cpu` installation fails, adjust manually:
+<!-- If `faiss-cpu` installation fails, adjust manually:
 
 ```bash
 # In requirements.txt, set faiss-cpu==1.7.3
 pip uninstall -y faiss-cpu
 pip install --no-binary=faiss-cpu faiss-cpu==1.7.1.post3
-```
+``` -->
 
 ---
 
