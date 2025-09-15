@@ -3,7 +3,7 @@
 Parse weekly LLM JSON -> scripts & images using requests + BeautifulSoup only.
 
 - Skips already-processed JSONs via LOG_FILE (basename match).
-- Writes scripts to OUTPUT_BASE/LANG/<stem>/sections/NN_slug.txt (UTF-8).
+- Writes scripts to OUTPUT_BASE/<stem>/sections/NN_slug.txt (UTF-8).
 - Image handling per section.image_url:
     1) Try direct download: if response Content-Type startswith image/
     2) Else, if ENABLE_HTML_SCRAPE=true, fetch page HTML and extract a real image URL via:
@@ -207,7 +207,6 @@ def process_json_file(json_path: Path, cfg: Dict[str, str], repo_root: Path) -> 
 
     # Paths from config
     out_base_rel = cfg_get(cfg, "OUTPUT_BASE", "data/step1_scripts")
-    lang = cfg_get(cfg, "LANG", "en")
     sections_sub = cfg_get(cfg, "SECTIONS_SUBDIR", "sections")
     images_sub = cfg_get(cfg, "IMAGES_SUBDIR", "image")
 
@@ -218,7 +217,7 @@ def process_json_file(json_path: Path, cfg: Dict[str, str], repo_root: Path) -> 
 
     # Output root for this JSON
     stem = json_path.stem  # e.g., 2025Week38
-    out_root = (repo_root / out_base_rel / lang / stem).resolve()
+    out_root = (repo_root / out_base_rel / stem).resolve()
     sections_dir = out_root / sections_sub
     images_dir = out_root / images_sub
     ensure_dir(sections_dir)

@@ -30,6 +30,7 @@ ffprobe.*
 /data
 /results
 /auto-video-pipeline/data/step0_json/*
+/auto-video-pipeline/data/step0_addon/*
 /auto-video-pipeline/data/step1_scripts/*
 /auto-video-pipeline/data/step2_wav-tts/*
 /auto-video-pipeline/data/step3_wav-converted/*
